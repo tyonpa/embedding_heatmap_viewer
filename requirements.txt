@@ -2,5 +2,6 @@ streamlit
 sentence-transformers
 torch
 matplotlib
+japanize-matplotlib
 seaborn
 numpy
