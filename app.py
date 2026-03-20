@@ -8,6 +8,8 @@ import seaborn as sns
 import streamlit as st
 from sentence_transformers import SentenceTransformer
 
+matplotlib.rcParams['font.family'] = 'IPAexGothic'
+
 
 MODEL_NAME = "google/embeddinggemma-300m"
 DEFAULT_ENTRIES = [
