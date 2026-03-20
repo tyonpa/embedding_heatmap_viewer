@@ -3,7 +3,7 @@
 Streamlit で動く、文章埋め込み可視化アプリです。  
 `google/embeddinggemma-300m` を CPU で使い、通常文章と足し引き文章ブロックのベクトルを比較できます。
 
-![デモはこちら！](https://emb-heatmap.streamlit.app/)
+[デモはこちら！](https://emb-heatmap.streamlit.app/)
 
 ## Overview
 
