@@ -2,23 +2,34 @@ from __future__ import annotations
 
 from typing import Iterable
 
-import matplotlib
+#import matplotlib
 import matplotlib.pyplot as plt
+import japanize_matplotlib
 import numpy as np
 import seaborn as sns
 import streamlit as st
 from sentence_transformers import SentenceTransformer
 
-matplotlib.rcParams['font.family'] = 'IPAexGothic'
+#matplotlib.rcParams['font.family'] = 'IPAexGothic'
 
 
-MODEL_NAME = "google/embeddinggemma-300m"
+DEFAULT_MODEL_KEY = "embeddinggemma"
+MODEL_OPTIONS = {
+    "embeddinggemma": {
+        "label": "EmbeddingGemma 300M",
+        "name": "google/embeddinggemma-300m",
+    },
+    "sbert": {
+        "label": "SBERT Multilingual MiniLM",
+        "name": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    },
+}
 DEFAULT_ENTRIES = [
     {"id": 1, "kind": "normal", "op": "+", "text": "私は犬が好きです。"},
     {"id": 2, "kind": "normal", "op": "+", "text": "私は猫も好きです。"},
-    {"id": 3, "kind": "composed", "block_id": 1, "normalize": False, "op": "+", "text": "私"},
-    {"id": 4, "kind": "composed", "block_id": 1, "normalize": False, "op": "+", "text": "犬"},
-    {"id": 5, "kind": "composed", "block_id": 1, "normalize": False, "op": "+", "text": "好き"},
+    {"id": 3, "kind": "composed", "block_id": 1, "normalize": True, "op": "+", "text": "私"},
+    {"id": 4, "kind": "composed", "block_id": 1, "normalize": True, "op": "+", "text": "犬"},
+    {"id": 5, "kind": "composed", "block_id": 1, "normalize": True, "op": "+", "text": "好き"},
 ]
 
 
@@ -31,6 +42,8 @@ def init_state() -> None:
     next_missing_id = 1
     existing_ids = {entry["id"] for entry in st.session_state.entries if "id" in entry}
     for entry in st.session_state.entries:
+        if entry.get("kind") == "composed" and "normalize" not in entry:
+            entry["normalize"] = True
         if "id" in entry:
             continue
         while next_missing_id in existing_ids:
@@ -40,6 +53,8 @@ def init_state() -> None:
         next_missing_id += 1
     if "new_entry_kind" not in st.session_state:
         st.session_state.new_entry_kind = "normal"
+    if "selected_model_key" not in st.session_state:
+        st.session_state.selected_model_key = DEFAULT_MODEL_KEY
     if "next_entry_id" not in st.session_state:
         existing_entry_ids = [entry.get("id", 0) for entry in st.session_state.entries]
         st.session_state.next_entry_id = (max(existing_entry_ids) if existing_entry_ids else 0) + 1
@@ -48,9 +63,20 @@ def init_state() -> None:
             entry.get("block_id", 0) for entry in st.session_state.entries if entry["kind"] == "composed"
         ]
         st.session_state.next_block_id = (max(existing_block_ids) if existing_block_ids else 0) + 1
+    if "difference_pairs" not in st.session_state:
+        st.session_state.difference_pairs = []
+    if "next_difference_pair_id" not in st.session_state:
+        existing_pair_ids = [pair.get("id", 0) for pair in st.session_state.difference_pairs]
+        st.session_state.next_difference_pair_id = (max(existing_pair_ids) if existing_pair_ids else 0) + 1
 
 
-def create_entry(kind: str, text: str = "", block_id: int | None = None, normalize: bool = False, op: str = "+") -> dict:
+def create_entry(
+    kind: str,
+    text: str = "",
+    block_id: int | None = None,
+    normalize: bool = True,
+    op: str = "+",
+) -> dict:
     entry = {
         "id": st.session_state.next_entry_id,
         "kind": kind,
@@ -65,8 +91,8 @@ def create_entry(kind: str, text: str = "", block_id: int | None = None, normali
 
 
 @st.cache_resource(show_spinner=False)
-def load_model() -> SentenceTransformer:
-    return SentenceTransformer(MODEL_NAME, device="cpu")
+def load_model(model_name: str) -> SentenceTransformer:
+    return SentenceTransformer(model_name, device="cpu")
 
 
 def add_entry() -> None:
@@ -77,7 +103,7 @@ def add_entry() -> None:
 
     block_id = st.session_state.next_block_id
     st.session_state.next_block_id += 1
-    st.session_state.entries.append(create_entry("composed", block_id=block_id, normalize=False))
+    st.session_state.entries.append(create_entry("composed", block_id=block_id, normalize=True))
 
 
 def add_entry_to_block(block_id: int) -> None:
@@ -85,12 +111,39 @@ def add_entry_to_block(block_id: int) -> None:
     for idx, entry in enumerate(st.session_state.entries):
         if entry["kind"] == "composed" and entry.get("block_id") == block_id:
             insert_at = idx + 1
-    st.session_state.entries.insert(insert_at, create_entry("composed", block_id=block_id, normalize=False))
+    st.session_state.entries.insert(insert_at, create_entry("composed", block_id=block_id, normalize=True))
 
 
 def remove_entry(index: int) -> None:
     if len(st.session_state.entries) > 1:
         st.session_state.entries.pop(index)
+
+
+def remove_block(block_id: int) -> None:
+    remaining_entries = [
+        entry
+        for entry in st.session_state.entries
+        if not (entry["kind"] == "composed" and entry.get("block_id") == block_id)
+    ]
+    if remaining_entries:
+        st.session_state.entries = remaining_entries
+
+
+def add_difference_pair(left: str, right: str) -> None:
+    st.session_state.difference_pairs.append(
+        {
+            "id": st.session_state.next_difference_pair_id,
+            "left": left,
+            "right": right,
+        }
+    )
+    st.session_state.next_difference_pair_id += 1
+
+
+def remove_difference_pair(pair_id: int) -> None:
+    st.session_state.difference_pairs = [
+        pair for pair in st.session_state.difference_pairs if pair.get("id") != pair_id
+    ]
 
 
 def get_groups() -> list[dict[str, int | str]]:
@@ -165,12 +218,115 @@ def compose_expression(entries: list[dict[str, str]], max_len: int | None = None
     return "".join(parts)
 
 
-def render_heatmap_block(vectors: list[np.ndarray], labels: list[str]) -> None:
+def build_group_target_options(groups: list[dict[str, object]]) -> list[dict[str, str]]:
+    options: list[dict[str, str]] = []
+    for group in groups:
+        if group["kind"] == "normal":
+            options.append(
+                {
+                    "id": str(group["target_id"]),
+                    "label": shorten_label(str(group["text"])),
+                }
+            )
+            continue
+        options.append(
+            {
+                "id": str(group["target_id"]),
+                "label": compose_expression(group["entries"], max_len=18),
+            }
+        )
+    return options
+
+
+def render_difference_selector(groups: list[dict[str, object]]) -> list[dict[str, str]]:
+    st.subheader("差分ヒートマップ")
+    st.caption("比較対象ベクトルから任意の 2 つを選び、`左 - 右` の差分ベクトルを表示できます。")
+
+    options = build_group_target_options(groups)
+    if len(options) < 2:
+        st.info("差分を作るには、比較対象ベクトルが2つ以上必要です。")
+        st.session_state.difference_pairs = []
+        return []
+
+    option_ids = [option["id"] for option in options]
+    option_labels = {option["id"]: option["label"] for option in options}
+    valid_pairs: list[dict[str, str]] = []
+
+    for pair in st.session_state.difference_pairs:
+        left = pair.get("left")
+        right = pair.get("right")
+        if left not in option_ids:
+            left = option_ids[0]
+        if right not in option_ids:
+            right = option_ids[1] if len(option_ids) > 1 else option_ids[0]
+        valid_pairs.append({"id": pair["id"], "left": left, "right": right})
+    st.session_state.difference_pairs = valid_pairs
+
+    container = st.container(border=True)
+    with container:
+        if not st.session_state.difference_pairs:
+            st.caption("差分ペアはまだありません。")
+
+        for pair in st.session_state.difference_pairs:
+            pair_id = pair["id"]
+            row = st.columns([5.4, 0.8, 5.4, 1.2])
+            with row[0]:
+                left = st.selectbox(
+                    f"左ベクトル {pair_id}",
+                    options=option_ids,
+                    index=option_ids.index(pair["left"]),
+                    format_func=lambda value: option_labels[value],
+                    key=f"difference_left_{pair_id}",
+                    label_visibility="collapsed",
+                )
+                pair["left"] = left
+            with row[1]:
+                st.markdown(
+                    "<div style='height:38px; display:flex; align-items:center; justify-content:center; color:#6b7280;'>-</div>",
+                    unsafe_allow_html=True,
+                )
+            with row[2]:
+                right = st.selectbox(
+                    f"右ベクトル {pair_id}",
+                    options=option_ids,
+                    index=option_ids.index(pair["right"]),
+                    format_func=lambda value: option_labels[value],
+                    key=f"difference_right_{pair_id}",
+                    label_visibility="collapsed",
+                )
+                pair["right"] = right
+            with row[3]:
+                st.button(
+                    "削除",
+                    key=f"remove_difference_pair_{pair_id}",
+                    on_click=remove_difference_pair,
+                    args=(pair_id,),
+                    use_container_width=True,
+                )
+
+        _, _, add_col = st.columns([8.8, 0.4, 1.2])
+        with add_col:
+            st.button(
+                "追加",
+                key="add_difference_pair",
+                on_click=add_difference_pair,
+                args=(option_ids[0], option_ids[1]),
+                use_container_width=True,
+            )
+
+    return st.session_state.difference_pairs
+
+
+def render_heatmap_block(vectors: list[np.ndarray], labels: list[str], color_limits: list[float] | None = None) -> None:
     if not vectors:
         return
 
     matrix = np.stack(vectors, axis=0)
-    max_abs = float(np.max(np.abs(matrix))) or 1.0
+    if color_limits is None:
+        row_limits = np.max(np.abs(matrix), axis=1)
+    else:
+        row_limits = np.asarray(color_limits, dtype=np.float32)
+    max_abs = float(np.max(row_limits)) or 1.0
     fig_height = max(1.1 + len(vectors) * 0.62, 1.8)
     fig, ax = plt.subplots(figsize=(16, fig_height))
 
@@ -262,20 +418,11 @@ def render_entry_editor() -> None:
         anchor = idx if move_anchor is None else move_anchor
         row = st.columns([1.4, 1.1, 8.1, 0.9, 0.9, 1.2])
         with row[0]:
-            kind_options = {"normal": "通常", "composed": "足し引き"}
-            selected = st.selectbox(
-                f"種類 {idx + 1}",
-                options=list(kind_options.keys()),
-                index=0 if entry["kind"] == "normal" else 1,
-                format_func=lambda value: kind_options[value],
-                key=f"kind_{entry_id}",
-                label_visibility="collapsed",
+            kind_label = "通常" if entry["kind"] == "normal" else "足し引き"
+            st.markdown(
+                f"<div style='height:38px; display:flex; align-items:center; justify-content:center; color:#111827;'>{kind_label}</div>",
+                unsafe_allow_html=True,
             )
-            if selected == "composed" and "block_id" not in st.session_state.entries[idx]:
-                st.session_state.entries[idx]["block_id"] = st.session_state.next_block_id
-                st.session_state.entries[idx]["normalize"] = False
-                st.session_state.next_block_id += 1
-            st.session_state.entries[idx]["kind"] = selected
 
         with row[1]:
             if st.session_state.entries[idx]["kind"] == "composed":
@@ -361,10 +508,10 @@ def render_entry_editor() -> None:
             st.caption(f"足し引き文章ブロック {block_id}")
             block = st.container(border=True)
             with block:
-                header_cols = st.columns([8.2, 0.9, 0.9])
-                with header_cols[0]:
+                header_cols = st.columns([1.4, 1.1, 8.1, 0.9, 0.9, 1.2])
+                with header_cols[2]:
                     st.caption("この範囲の文章が1つの合成ベクトルにまとめられます。")
-                with header_cols[1]:
+                with header_cols[3]:
                     st.button(
                         "↑",
                         key=f"move_up_block_{block_id}",
@@ -372,12 +519,20 @@ def render_entry_editor() -> None:
                         args=(block_start, "up"),
                         use_container_width=True,
                     )
-                with header_cols[2]:
+                with header_cols[4]:
                     st.button(
                         "↓",
                         key=f"move_down_block_{block_id}",
                         on_click=move_group,
                         args=(block_start, "down"),
+                        use_container_width=True,
+                    )
+                with header_cols[5]:
+                    st.button(
+                        "削除",
+                        key=f"remove_block_{block_id}",
+                        on_click=remove_block,
+                        args=(block_id,),
                         use_container_width=True,
                     )
                 current_normalize = bool(st.session_state.entries[block_start].get("normalize", False))
@@ -391,8 +546,8 @@ def render_entry_editor() -> None:
                     st.session_state.entries[composed_idx]["normalize"] = normalize_value
                 for composed_idx in range(block_start, block_end):
                     render_entry_row(composed_idx, show_move_buttons=False, move_anchor=block_start)
-                _, add_col = st.columns([8.8, 1.2])
-                with add_col:
+                add_row = st.columns([1.4, 1.1, 8.1, 0.9, 0.9, 1.2])
+                with add_row[5]:
                     st.button(
                         "追加",
                         key=f"add_block_{block_id}",
@@ -427,7 +582,13 @@ def collect_inputs() -> list[dict[str, object]]:
 
         if entry["kind"] == "normal":
             if text:
-                groups.append({"kind": "normal", "text": text})
+                groups.append(
+                    {
+                        "kind": "normal",
+                        "target_id": f"normal:{entry['id']}",
+                        "text": text,
+                    }
+                )
             idx += 1
             continue
 
@@ -442,13 +603,19 @@ def collect_inputs() -> list[dict[str, object]]:
             current = st.session_state.entries[idx]
             current_text = current["text"].strip()
             if current_text:
-                block_entries.append({"op": current["op"], "text": current_text})
+                block_entries.append(
+                    {
+                        "op": current["op"],
+                        "text": current_text,
+                    }
+                )
             idx += 1
 
         if block_entries:
             groups.append(
                 {
                     "kind": "composed",
+                    "target_id": f"composed:{block_id}",
                     "block_id": block_id,
                     "normalize": normalize,
                     "entries": block_entries,
@@ -458,7 +625,11 @@ def collect_inputs() -> list[dict[str, object]]:
     return groups
 
 
-def render_results(model: SentenceTransformer, groups: list[dict[str, object]]) -> None:
+def render_results(
+    model: SentenceTransformer,
+    groups: list[dict[str, object]],
+    difference_pairs: list[dict[str, str]],
+) -> None:
     texts_to_embed: list[str] = []
     for group in groups:
         if group["kind"] == "normal":
@@ -466,7 +637,7 @@ def render_results(model: SentenceTransformer, groups: list[dict[str, object]]) 
         else:
             texts_to_embed.extend(entry["text"] for entry in group["entries"])
 
-    with st.spinner(f"{MODEL_NAME} で埋め込みを計算しています..."):
+    with st.spinner("埋め込みを計算しています..."):
         embedded = embed_texts(model, texts_to_embed)
 
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
@@ -475,6 +646,7 @@ def render_results(model: SentenceTransformer, groups: list[dict[str, object]]) 
     expanded_labels: list[str] = []
     comparison_vectors: list[np.ndarray] = []
     comparison_labels: list[str] = []
+    comparison_lookup: dict[str, tuple[np.ndarray, str]] = {}
 
     offset = 0
     for group in groups:
@@ -486,6 +658,7 @@ def render_results(model: SentenceTransformer, groups: list[dict[str, object]]) 
             expanded_labels.append(label)
             comparison_vectors.append(vector)
             comparison_labels.append(label)
+            comparison_lookup[str(group["target_id"])] = (vector, label)
             continue
 
         block_entries = group["entries"]
@@ -493,13 +666,17 @@ def render_results(model: SentenceTransformer, groups: list[dict[str, object]]) 
         block_vectors = [vector for vector in embedded[offset : offset + block_len]]
         offset += block_len
 
+        plus_count = sum(1 for entry in block_entries if entry["op"] == "+")
+        minus_count = sum(1 for entry in block_entries if entry["op"] == "-")
         signed_vectors = [
             vector if entry["op"] == "+" else -vector
             for entry, vector in zip(block_entries, block_vectors, strict=True)
         ]
         combined_vector = np.sum(np.stack(signed_vectors, axis=0), axis=0)
         if group.get("normalize", False):
-            combined_vector = combined_vector / block_len
+            normalize_divisor = abs(plus_count - minus_count)
+            if normalize_divisor > 0:
+                combined_vector = combined_vector / normalize_divisor
         expression_label = compose_expression(block_entries, max_len=18)
 
         expanded_vectors.extend(block_vectors)
@@ -511,10 +688,28 @@ def render_results(model: SentenceTransformer, groups: list[dict[str, object]]) 
 
         comparison_vectors.append(combined_vector)
         comparison_labels.append(expression_label)
+        comparison_lookup[str(group["target_id"])] = (combined_vector, expression_label)
 
     if comparison_vectors:
         st.caption("比較表示")
         render_heatmap_block(comparison_vectors, comparison_labels)
+
+        difference_vectors: list[np.ndarray] = []
+        difference_labels: list[str] = []
+        difference_color_limits: list[float] = []
+        for pair in difference_pairs:
+            left = comparison_lookup.get(pair["left"])
+            right = comparison_lookup.get(pair["right"])
+            if left is None or right is None:
+                continue
+            difference_vectors.append(left[0] - right[0])
+            difference_labels.append(f"{left[1]} - {right[1]}")
+            difference_color_limits.append(max(float(np.max(np.abs(left[0]))), float(np.max(np.abs(right[0])))))
+
+        if difference_vectors:
+            st.caption("差分表示")
+            render_heatmap_block(difference_vectors, difference_labels, color_limits=difference_color_limits)
+
         st.caption("コサイン類似度")
         render_cosine_similarity(comparison_vectors, comparison_labels)
 
@@ -527,17 +722,29 @@ def main() -> None:
     init_state()
 
     st.title("Embedding Heatmap Viewer")
-    st.caption(f"モデル: `{MODEL_NAME}` / CPU")
+    selected_model_key = st.selectbox(
+        "埋め込みモデル",
+        options=list(MODEL_OPTIONS.keys()),
+        index=list(MODEL_OPTIONS.keys()).index(st.session_state.selected_model_key),
+        format_func=lambda value: MODEL_OPTIONS[value]["label"],
+        key="selected_model_key",
+    )
+    selected_model = MODEL_OPTIONS[selected_model_key]
+    st.caption(f"モデル: `{selected_model['name']}` / CPU")
 
     try:
         with st.spinner("埋め込みモデルを読み込んでいます..."):
-            model = load_model()
+            model = load_model(selected_model["name"])
     except Exception as exc:
         st.error("モデルの読み込みに失敗しました。初回はモデルのダウンロードが必要です。")
         st.exception(exc)
         return
 
     render_entry_editor()
+
+    groups = collect_inputs()
+    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+    difference_pairs = render_difference_selector(groups)
 
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
     _, center_col, _ = st.columns([1, 1.2, 1])
@@ -547,12 +754,11 @@ def main() -> None:
     if not submitted:
         return
 
-    groups = collect_inputs()
     if not groups:
         st.warning("少なくとも1つは文章を入力してください。")
         return
 
-    render_results(model, groups)
+    render_results(model, groups, difference_pairs)
 
 
 if __name__ == "__main__":
